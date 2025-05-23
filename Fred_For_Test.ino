@@ -3,6 +3,7 @@
 #include "pin_map.h"
 #include <PID_v1.h>
 #include <AccelStepper.h>
+#include <Servo.h>  // 1. Incluye la librería Servo
 
 Thermistor Thermistor1(TEMP_0_PIN);
 float Temp;
@@ -25,6 +26,18 @@ PID myPID(&Input, &Output, &Setpoint, Kp, Ki, Kd, DIRECT);
 // Estados
 int moto_m = 0, fan_m = 0, heater_m = 0, extruder_m = 0;
 unsigned long lastStatusUpdate = 0;
+
+// -------- SERVO --------
+Servo miServo;           // 2. Declara el objeto Servo
+const int servoPin = 10; // Cambia por el pin que uses
+// Posiciones
+const int SERVO_CENTRO = 90;
+const int SERVO_IZQ = SERVO_CENTRO - 65; // 25
+const int SERVO_DER = SERVO_CENTRO + 65; // 155
+// Control de tiempo para servo
+unsigned long lastServoMove = 0;
+int servoStep = 0;
+const unsigned long SERVO_INTERVAL = 800; // ms
 
 void setup() {
   Serial.begin(115200);
@@ -49,6 +62,10 @@ void setup() {
   Setpoint = 190;
   myPID.SetMode(AUTOMATIC);
   myPID.SetOutputLimits(0, 255);
+
+  // --- Inicializar Servo ---
+  miServo.attach(servoPin);   // 3. Inicializa el Servo
+  miServo.write(SERVO_CENTRO);
 }
 
 void loop() {
@@ -110,14 +127,34 @@ void loop() {
   }
 
   // HEATER (control por PID + ACTUATE)
-  // Solo aplica calor si el usuario lo encendió (digits[3]=='1')
-  // y la temperatura actual está por debajo del setpoint.
   if (digits.length() >= 4 && digits[3] == '1' && Input < Setpoint) {
     analogWrite(RAMPS_D10_PIN, (int)Output);
     heater_m = 1;
   } else {
     analogWrite(RAMPS_D10_PIN, 0);
     heater_m = 0;
+  }
+
+  // ---------- CONTROL DEL SERVO (no bloqueante) ----------
+  unsigned long now = millis();
+  if (now - lastServoMove > SERVO_INTERVAL) {
+    lastServoMove = now;
+    switch (servoStep) {
+      case 0:
+        miServo.write(SERVO_IZQ);    // Izquierda
+        break;
+      case 1:
+        miServo.write(SERVO_CENTRO); // Centro
+        break;
+      case 2:
+        miServo.write(SERVO_DER);    // Derecha
+        break;
+      case 3:
+        miServo.write(SERVO_CENTRO); // Centro
+        break;
+    }
+    servoStep++;
+    if (servoStep > 3) servoStep = 0;
   }
 
   // Mostrar estado cada segundo
