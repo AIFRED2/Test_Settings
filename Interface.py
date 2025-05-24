@@ -50,7 +50,6 @@ class ControlGUI(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("AI-FrED0 Control Interface")
-        self.setWindowIcon(QIcon(r"tec-logo.png"))
         self.resize(900, 600)
 
         # Estados y datos
