@@ -1,0 +1,1394 @@
+Saltar al contenido
+Historial del chat
+
+Dijiste:
+Hazme un codigo para mover un servo motor 65 grados a la  izquierda, luego volver al centro y 65 grados a la derecha constantemente sin parar
+ChatGPT dijo:
+¡Claro! Aquí tienes un código simple de Arduino para mover un servo motor primero 65° a la izquierda, regresar al centro (90°), después 65° a la derecha, y repetir ese ciclo sin parar.
+El centro de un servo estándar es 90°.
+
+65° a la izquierda es: 90° - 65° = 25°
+
+65° a la derecha es: 90° + 65° = 155°
+
+Conexión:
+
+Señal del servo a pin 9 de Arduino
+
+Alimentación: 5V y GND
+
+#include <Servo.h>
+
+Servo miServo;
+
+void setup() {
+  miServo.attach(9); // Pin donde conectas la señal del servo
+}
+
+void loop() {
+  // Mover a la izquierda (25°)
+  miServo.write(25);
+  delay(800); // Espera para que se mueva
+
+  // Volver al centro (90°)
+  miServo.write(90);
+  delay(800);
+
+  // Mover a la derecha (155°)
+  miServo.write(155);
+  delay(800);
+
+  // Volver al centro (90°)
+  miServo.write(90);
+  delay(800);
+}
+Notas:
+
+Puedes ajustar el delay(800); si quieres que se mueva más rápido o más lento.
+
+Si tu servo es muy pequeño o lento, usa delays un poco más altos.
+
+¿Quieres el código con un botón para iniciar/detener el movimiento, o así está bien para tu prueba?
+
+Dijiste:
+dame un sudo para instalar matplotlib en raspberry
+ChatGPT dijo:
+¡Claro! Para instalar matplotlib en tu Raspberry Pi, abre una terminal y escribe:
+
+sudo apt update && sudo apt install -y python3-matplotlib
+Esto actualizará los repositorios e instalará matplotlib para Python 3.
+¡Listo! Ya podrás importar y usar matplotlib en tus scripts de Python.
+
+Dijiste:
+integralo en este codigo #include <math.h>
+#include "Thermistor.h"
+#include "pin_map.h"
+#include <PID_v1.h>
+#include <AccelStepper.h>
+
+Thermistor Thermistor1(TEMP_0_PIN);
+float Temp;
+String input = "";
+String digits = "0000";  // Estado de los actuadores
+
+// Motores
+AccelStepper motor1(AccelStepper::DRIVER, 54, 55); // Spool
+AccelStepper motor2(AccelStepper::DRIVER, 26, 28); // Extruder
+const int enablePin1 = 38;
+const int enablePin2 = 24;
+bool motor1Enabled = false;
+bool motor2Enabled = false;
+
+// PID
+double Setpoint, Input, Output;
+double Kp = 22.85, Ki = 1.85, Kd = 70.65;
+PID myPID(&Input, &Output, &Setpoint, Kp, Ki, Kd, DIRECT);
+
+// Estados
+int moto_m = 0, fan_m = 0, heater_m = 0, extruder_m = 0;
+unsigned long lastStatusUpdate = 0;
+
+void setup() {
+  Serial.begin(115200);
+  Serial.println("Conexión establecida");
+
+  pinMode(TEMP_0_PIN, INPUT_PULLUP);
+  pinMode(RAMPS_D9_PIN, OUTPUT);    // fan
+  pinMode(RAMPS_D10_PIN, OUTPUT);   // heater <-- lo agregamos
+  pinMode(TEMP_OUT, OUTPUT);
+  pinMode(enablePin1, OUTPUT);
+  pinMode(enablePin2, OUTPUT);
+
+  digitalWrite(enablePin1, HIGH);
+  digitalWrite(enablePin2, HIGH);
+
+  motor1.setMaxSpeed(5000);
+  motor1.setAcceleration(100);
+
+  motor2.setMaxSpeed(2000);
+  motor2.setAcceleration(1000);
+
+  Setpoint = 190;
+  myPID.SetMode(AUTOMATIC);
+  myPID.SetOutputLimits(0, 255);
+}
+
+void loop() {
+  delay(10);
+  Input = Thermistor1.getValue();
+  myPID.Compute();
+
+  // Procesar datos seriales
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (c == '\n') {
+      processInput(input);
+      input = "";
+    } else {
+      input += c;
+    }
+  }
+
+  // MOTOR SPOOL
+  if (digits.length() >= 1 && digits[0] == '1') {
+    if (!motor1Enabled) {
+      digitalWrite(enablePin1, LOW);
+      motor1Enabled = true;
+    }
+    motor1.setSpeed(500);
+    motor1.runSpeed();
+    moto_m = 1;
+  } else {
+    if (motor1Enabled) {
+      digitalWrite(enablePin1, HIGH);
+      motor1Enabled = false;
+    }
+    moto_m = 0;
+  }
+
+  // FAN
+  if (digits.length() >= 2 && digits[1] == '1') {
+    analogWrite(RAMPS_D9_PIN, 150);
+    fan_m = 1;
+  } else {
+    analogWrite(RAMPS_D9_PIN, 0);
+    fan_m = 0;
+  }
+
+  // EXTRUDER
+  if (digits.length() >= 3 && digits[2] == '1') {
+    if (!motor2Enabled) {
+      digitalWrite(enablePin2, LOW);
+      motor2Enabled = true;
+    }
+    motor2.runSpeed();
+    extruder_m = 1;
+  } else {
+    if (motor2Enabled) {
+      digitalWrite(enablePin2, HIGH);
+      motor2Enabled = false;
+    }
+    extruder_m = 0;
+  }
+
+  // HEATER (control por PID + ACTUATE)
+  // Solo aplica calor si el usuario lo encendió (digits[3]=='1')
+  // y la temperatura actual está por debajo del setpoint.
+  if (digits.length() >= 4 && digits[3] == '1' && Input < Setpoint) {
+    analogWrite(RAMPS_D10_PIN, (int)Output);
+    heater_m = 1;
+  } else {
+    analogWrite(RAMPS_D10_PIN, 0);
+    heater_m = 0;
+  }
+
+  // Mostrar estado cada segundo
+  unsigned long currentMillis = millis();
+  if (currentMillis - lastStatusUpdate >= 1000) {
+    lastStatusUpdate = currentMillis;
+    Serial.print("Temp:"); 
+    Serial.println(Input);
+    Serial.println("--- Estado de componentes ---");
+    Serial.print("Motor Spool: "); Serial.println(moto_m ? "Encendido" : "Apagado");
+    Serial.print("Fan:          "); Serial.println(fan_m ? "Encendido" : "Apagado");
+    Serial.print("Heater:       "); Serial.println(heater_m ? "Encendido" : "Apagado");
+    Serial.print("Extruder:     "); Serial.println(extruder_m ? "Encendido" : "Apagado");
+    Serial.println("-----------------------------");
+  }
+}
+
+void processInput(String command) {
+  Serial.print("Recibido: ");
+  Serial.println(command);
+
+  if (command.startsWith("ACTUATE:")) {
+    digits = command.substring(8);
+  } else if (command.startsWith("SPEED:")) {
+    int nuevaVel = command.substring(6).toInt();
+    motor2.setSpeed(nuevaVel);
+    Serial.print("Nueva velocidad extrusor: ");
+    Serial.println(nuevaVel);
+  }
+}
+ChatGPT dijo:
+¡Por supuesto!
+Aquí tienes cómo integrar el código de matplotlib para graficar la temperatura en Python, NO en el código de Arduino (recuerda: matplotlib es para Python, no para Arduino).
+
+¿Cómo funciona?
+Tu código Arduino envía la temperatura por Serial.
+
+Un script de Python en la Raspberry Pi lee la temperatura y la grafica en tiempo real usando matplotlib.
+
+PASOS:
+1. Mantén tu código de Arduino tal cual (ya envía la temperatura por Serial cada segundo):
+Serial.print("Temp:"); 
+Serial.println(Input);
+2. Instala matplotlib en la Raspberry Pi (solo una vez):
+sudo apt update && sudo apt install -y python3-matplotlib
+3. Script Python para graficar en tiempo real
+Guarda esto como grafica_temp.py en tu Raspberry Pi.
+Cambia el puerto '/dev/ttyACM0' si tu Arduino está en otro.
+
+import serial
+import matplotlib.pyplot as plt
+import re
+
+# Cambia el puerto según tu Arduino
+ser = serial.Serial('/dev/ttyACM0', 115200, timeout=1)
+
+temps = []
+tiempos = []
+plt.ion()  # Modo interactivo
+
+fig, ax = plt.subplots()
+linea, = ax.plot(tiempos, temps, '-')
+
+t = 0
+
+try:
+    while True:
+        dato = ser.readline().decode('utf-8', errors='ignore')
+        # Buscar línea que comience con Temp:
+        if dato.startswith('Temp:'):
+            temp = float(re.findall(r"[-+]?\d*\.\d+|\d+", dato)[0])
+            temps.append(temp)
+            tiempos.append(t)
+            t += 1
+            # Mantener solo los últimos 100 datos
+            temps = temps[-100:]
+            tiempos = tiempos[-100:]
+            linea.set_xdata(tiempos)
+            linea.set_ydata(temps)
+            ax.relim()
+            ax.autoscale_view()
+            plt.xlabel('Tiempo (s)')
+            plt.ylabel('Temperatura (°C)')
+            plt.title('Temperatura en tiempo real')
+            plt.pause(0.05)
+except KeyboardInterrupt:
+    print("Detenido por el usuario")
+finally:
+    ser.close()
+Resumiendo:
+
+El código de Arduino no se modifica.
+
+El script Python toma los datos de temperatura enviados por Serial y los grafica con matplotlib.
+
+¿Quieres que el script también guarde los datos en un CSV? ¿O necesitas una gráfica para los estados de actuadores también?
+Solo dime si quieres esos extras.
+
+Dijiste:
+integra el codgio del servo que hiciste en este codigo #include <math.h>
+#include "Thermistor.h"
+#include "pin_map.h"
+#include <PID_v1.h>
+#include <AccelStepper.h>
+
+Thermistor Thermistor1(TEMP_0_PIN);
+float Temp;
+String input = "";
+String digits = "0000";  // Estado de los actuadores
+
+// Motores
+AccelStepper motor1(AccelStepper::DRIVER, 54, 55); // Spool
+AccelStepper motor2(AccelStepper::DRIVER, 26, 28); // Extruder
+const int enablePin1 = 38;
+const int enablePin2 = 24;
+bool motor1Enabled = false;
+bool motor2Enabled = false;
+
+// PID
+double Setpoint, Input, Output;
+double Kp = 22.85, Ki = 1.85, Kd = 70.65;
+PID myPID(&Input, &Output, &Setpoint, Kp, Ki, Kd, DIRECT);
+
+// Estados
+int moto_m = 0, fan_m = 0, heater_m = 0, extruder_m = 0;
+unsigned long lastStatusUpdate = 0;
+
+void setup() {
+  Serial.begin(115200);
+  Serial.println("Conexión establecida");
+
+  pinMode(TEMP_0_PIN, INPUT_PULLUP);
+  pinMode(RAMPS_D9_PIN, OUTPUT);    // fan
+  pinMode(RAMPS_D10_PIN, OUTPUT);   // heater <-- lo agregamos
+  pinMode(TEMP_OUT, OUTPUT);
+  pinMode(enablePin1, OUTPUT);
+  pinMode(enablePin2, OUTPUT);
+
+  digitalWrite(enablePin1, HIGH);
+  digitalWrite(enablePin2, HIGH);
+
+  motor1.setMaxSpeed(5000);
+  motor1.setAcceleration(100);
+
+  motor2.setMaxSpeed(2000);
+  motor2.setAcceleration(1000);
+
+  Setpoint = 190;
+  myPID.SetMode(AUTOMATIC);
+  myPID.SetOutputLimits(0, 255);
+}
+
+void loop() {
+  delay(10);
+  Input = Thermistor1.getValue();
+  myPID.Compute();
+
+  // Procesar datos seriales
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (c == '\n') {
+      processInput(input);
+      input = "";
+    } else {
+      input += c;
+    }
+  }
+
+  // MOTOR SPOOL
+  if (digits.length() >= 1 && digits[0] == '1') {
+    if (!motor1Enabled) {
+      digitalWrite(enablePin1, LOW);
+      motor1Enabled = true;
+    }
+    motor1.setSpeed(500);
+    motor1.runSpeed();
+    moto_m = 1;
+  } else {
+    if (motor1Enabled) {
+      digitalWrite(enablePin1, HIGH);
+      motor1Enabled = false;
+    }
+    moto_m = 0;
+  }
+
+  // FAN
+  if (digits.length() >= 2 && digits[1] == '1') {
+    analogWrite(RAMPS_D9_PIN, 150);
+    fan_m = 1;
+  } else {
+    analogWrite(RAMPS_D9_PIN, 0);
+    fan_m = 0;
+  }
+
+  // EXTRUDER
+  if (digits.length() >= 3 && digits[2] == '1') {
+    if (!motor2Enabled) {
+      digitalWrite(enablePin2, LOW);
+      motor2Enabled = true;
+    }
+    motor2.runSpeed();
+    extruder_m = 1;
+  } else {
+    if (motor2Enabled) {
+      digitalWrite(enablePin2, HIGH);
+      motor2Enabled = false;
+    }
+    extruder_m = 0;
+  }
+
+  // HEATER (control por PID + ACTUATE)
+  // Solo aplica calor si el usuario lo encendió (digits[3]=='1')
+  // y la temperatura actual está por debajo del setpoint.
+  if (digits.length() >= 4 && digits[3] == '1' && Input < Setpoint) {
+    analogWrite(RAMPS_D10_PIN, (int)Output);
+    heater_m = 1;
+  } else {
+    analogWrite(RAMPS_D10_PIN, 0);
+    heater_m = 0;
+  }
+
+  // Mostrar estado cada segundo
+  unsigned long currentMillis = millis();
+  if (currentMillis - lastStatusUpdate >= 1000) {
+    lastStatusUpdate = currentMillis;
+    Serial.print("Temp:"); 
+    Serial.println(Input);
+    Serial.println("--- Estado de componentes ---");
+    Serial.print("Motor Spool: "); Serial.println(moto_m ? "Encendido" : "Apagado");
+    Serial.print("Fan:          "); Serial.println(fan_m ? "Encendido" : "Apagado");
+    Serial.print("Heater:       "); Serial.println(heater_m ? "Encendido" : "Apagado");
+    Serial.print("Extruder:     "); Serial.println(extruder_m ? "Encendido" : "Apagado");
+    Serial.println("-----------------------------");
+  }
+}
+
+void processInput(String command) {
+  Serial.print("Recibido: ");
+  Serial.println(command);
+
+  if (command.startsWith("ACTUATE:")) {
+    digits = command.substring(8);
+  } else if (command.startsWith("SPEED:")) {
+    int nuevaVel = command.substring(6).toInt();
+    motor2.setSpeed(nuevaVel);
+    Serial.print("Nueva velocidad extrusor: ");
+    Serial.println(nuevaVel);
+  }
+}
+ChatGPT dijo:
+¡Perfecto! Te agrego el control del servo para que se mueva 65° a la izquierda, centro, 65° a la derecha y regrese al centro constantemente, sin parar.
+El servo lo puedes conectar, por ejemplo, al pin 10 de Arduino (puedes cambiarlo si usas otro pin).
+
+Pasos de integración:
+
+Incluye la librería Servo.
+
+Declara el objeto Servo y variables para el control de movimiento.
+
+Inicializa el Servo en setup().
+
+Agrega la secuencia en loop() (con temporizador, para no trabar el resto de tu código).
+
+Aquí tienes el código ya integrado y listo:
+#include <math.h>
+#include "Thermistor.h"
+#include "pin_map.h"
+#include <PID_v1.h>
+#include <AccelStepper.h>
+#include <Servo.h>  // 1. Incluye la librería Servo
+
+Thermistor Thermistor1(TEMP_0_PIN);
+float Temp;
+String input = "";
+String digits = "0000";  // Estado de los actuadores
+
+// Motores
+AccelStepper motor1(AccelStepper::DRIVER, 54, 55); // Spool
+AccelStepper motor2(AccelStepper::DRIVER, 26, 28); // Extruder
+const int enablePin1 = 38;
+const int enablePin2 = 24;
+bool motor1Enabled = false;
+bool motor2Enabled = false;
+
+// PID
+double Setpoint, Input, Output;
+double Kp = 22.85, Ki = 1.85, Kd = 70.65;
+PID myPID(&Input, &Output, &Setpoint, Kp, Ki, Kd, DIRECT);
+
+// Estados
+int moto_m = 0, fan_m = 0, heater_m = 0, extruder_m = 0;
+unsigned long lastStatusUpdate = 0;
+
+// -------- SERVO --------
+Servo miServo;           // 2. Declara el objeto Servo
+const int servoPin = 10; // Cambia por el pin que uses
+// Posiciones
+const int SERVO_CENTRO = 90;
+const int SERVO_IZQ = SERVO_CENTRO - 65; // 25
+const int SERVO_DER = SERVO_CENTRO + 65; // 155
+// Control de tiempo para servo
+unsigned long lastServoMove = 0;
+int servoStep = 0;
+const unsigned long SERVO_INTERVAL = 800; // ms
+
+void setup() {
+  Serial.begin(115200);
+  Serial.println("Conexión establecida");
+
+  pinMode(TEMP_0_PIN, INPUT_PULLUP);
+  pinMode(RAMPS_D9_PIN, OUTPUT);    // fan
+  pinMode(RAMPS_D10_PIN, OUTPUT);   // heater <-- lo agregamos
+  pinMode(TEMP_OUT, OUTPUT);
+  pinMode(enablePin1, OUTPUT);
+  pinMode(enablePin2, OUTPUT);
+
+  digitalWrite(enablePin1, HIGH);
+  digitalWrite(enablePin2, HIGH);
+
+  motor1.setMaxSpeed(5000);
+  motor1.setAcceleration(100);
+
+  motor2.setMaxSpeed(2000);
+  motor2.setAcceleration(1000);
+
+  Setpoint = 190;
+  myPID.SetMode(AUTOMATIC);
+  myPID.SetOutputLimits(0, 255);
+
+  // --- Inicializar Servo ---
+  miServo.attach(servoPin);   // 3. Inicializa el Servo
+  miServo.write(SERVO_CENTRO);
+}
+
+void loop() {
+  delay(10);
+  Input = Thermistor1.getValue();
+  myPID.Compute();
+
+  // Procesar datos seriales
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (c == '\n') {
+      processInput(input);
+      input = "";
+    } else {
+      input += c;
+    }
+  }
+
+  // MOTOR SPOOL
+  if (digits.length() >= 1 && digits[0] == '1') {
+    if (!motor1Enabled) {
+      digitalWrite(enablePin1, LOW);
+      motor1Enabled = true;
+    }
+    motor1.setSpeed(500);
+    motor1.runSpeed();
+    moto_m = 1;
+  } else {
+    if (motor1Enabled) {
+      digitalWrite(enablePin1, HIGH);
+      motor1Enabled = false;
+    }
+    moto_m = 0;
+  }
+
+  // FAN
+  if (digits.length() >= 2 && digits[1] == '1') {
+    analogWrite(RAMPS_D9_PIN, 150);
+    fan_m = 1;
+  } else {
+    analogWrite(RAMPS_D9_PIN, 0);
+    fan_m = 0;
+  }
+
+  // EXTRUDER
+  if (digits.length() >= 3 && digits[2] == '1') {
+    if (!motor2Enabled) {
+      digitalWrite(enablePin2, LOW);
+      motor2Enabled = true;
+    }
+    motor2.runSpeed();
+    extruder_m = 1;
+  } else {
+    if (motor2Enabled) {
+      digitalWrite(enablePin2, HIGH);
+      motor2Enabled = false;
+    }
+    extruder_m = 0;
+  }
+
+  // HEATER (control por PID + ACTUATE)
+  if (digits.length() >= 4 && digits[3] == '1' && Input < Setpoint) {
+    analogWrite(RAMPS_D10_PIN, (int)Output);
+    heater_m = 1;
+  } else {
+    analogWrite(RAMPS_D10_PIN, 0);
+    heater_m = 0;
+  }
+
+  // ---------- CONTROL DEL SERVO (no bloqueante) ----------
+  unsigned long now = millis();
+  if (now - lastServoMove > SERVO_INTERVAL) {
+    lastServoMove = now;
+    switch (servoStep) {
+      case 0:
+        miServo.write(SERVO_IZQ);    // Izquierda
+        break;
+      case 1:
+        miServo.write(SERVO_CENTRO); // Centro
+        break;
+      case 2:
+        miServo.write(SERVO_DER);    // Derecha
+        break;
+      case 3:
+        miServo.write(SERVO_CENTRO); // Centro
+        break;
+    }
+    servoStep++;
+    if (servoStep > 3) servoStep = 0;
+  }
+
+  // Mostrar estado cada segundo
+  unsigned long currentMillis = millis();
+  if (currentMillis - lastStatusUpdate >= 1000) {
+    lastStatusUpdate = currentMillis;
+    Serial.print("Temp:"); 
+    Serial.println(Input);
+    Serial.println("--- Estado de componentes ---");
+    Serial.print("Motor Spool: "); Serial.println(moto_m ? "Encendido" : "Apagado");
+    Serial.print("Fan:          "); Serial.println(fan_m ? "Encendido" : "Apagado");
+    Serial.print("Heater:       "); Serial.println(heater_m ? "Encendido" : "Apagado");
+    Serial.print("Extruder:     "); Serial.println(extruder_m ? "Encendido" : "Apagado");
+    Serial.println("-----------------------------");
+  }
+}
+
+void processInput(String command) {
+  Serial.print("Recibido: ");
+  Serial.println(command);
+
+  if (command.startsWith("ACTUATE:")) {
+    digits = command.substring(8);
+  } else if (command.startsWith("SPEED:")) {
+    int nuevaVel = command.substring(6).toInt();
+    motor2.setSpeed(nuevaVel);
+    Serial.print("Nueva velocidad extrusor: ");
+    Serial.println(nuevaVel);
+  }
+}
+Notas rápidas:
+El servo se moverá: izquierda (25°) → centro (90°) → derecha (155°) → centro (90°) y repite.
+
+Cambia servoPin si usas otro pin para el servo.
+
+El control es no bloqueante, así que no afecta los otros motores o procesos.
+
+¿Te gustaría que el movimiento del servo sea activado solo por un comando específico, o siempre debe estar en movimiento?
+
+Dijiste:
+al intentar instalar matpplotloib en raspberry sale, files list file for package libfm'gtk4Ñarm64 is missing final newline, returned an error code 
+ChatGPT dijo:
+¡Buen diagnóstico! Ese error:
+
+files list file for package 'libfm-gtk4:arm64' is missing final newline, returned an error code
+indica un problema con la base de datos de paquetes de tu sistema, no con matplotlib como tal.
+
+Esto es común cuando se interrumpe una instalación o el sistema se apaga abruptamente durante un apt install.
+
+¿Cómo arreglarlo?
+1. Corrige los archivos de lista de paquetes corruptos:
+Ejecuta estos comandos uno por uno en tu terminal:
+
+sudo rm /var/lib/dpkg/info/libfm-gtk4:arm64.list
+sudo apt-get update
+sudo apt-get --fix-broken install
+2. Limpia y repara la base de datos de paquetes:
+sudo dpkg --configure -a
+sudo apt-get clean
+sudo apt-get update
+3. Intenta instalar matplotlib de nuevo:
+sudo apt install python3-matplotlib
+¿Sigue el error?
+
+Si libfm-gtk4:arm64 es un paquete que no necesitas, puedes removerlo:
+
+sudo apt-get remove --purge libfm-gtk4:arm64
+sudo apt-get autoremove
+sudo apt-get update
+Luego intenta instalar de nuevo matplotlib.
+
+¿Sigue el problema?
+Copia y pega aquí el mensaje completo de error para darte la solución exacta, pero en la gran mayoría de casos los pasos anteriores lo resuelven.
+
+¿Quieres instrucciones para instalar matplotlib con pip (fuera del sistema)?
+Solo dime si quieres esa alternativa, es mucho más sencillo y no depende de apt.
+
+Dijiste:
+mejor haz que el servo empiece ese ciclo cuando el boton en mi interfaz,py lo mande, agrega un boton en mi interfaz para controlar esoimport sys
+import serial
+import serial.tools.list_ports
+import numpy as np
+from PyQt5.QtWidgets import (
+    QApplication, QWidget, QPushButton, QVBoxLayout, QHBoxLayout,
+    QLabel, QSlider, QFileDialog
+)
+from PyQt5.QtCore import Qt, QTimer
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
+
+# -----------------------
+# Serial: auto-detect puerto
+# -----------------------
+
+def encontrar_puerto_arduino():
+    puertos = serial.tools.list_ports.comports()
+    for p in puertos:
+        if "Arduino" in p.description or "ttyACM" in p.device or "ttyUSB" in p.device:
+            return p.device
+    return None
+
+puerto = encontrar_puerto_arduino() or "/dev/ttyACM0"
+arduino = serial.Serial(puerto, 115200, timeout=1)
+
+# -----------------------
+# PlotCanvas: contenedor de gráficas
+# -----------------------
+class PlotCanvas(FigureCanvas):
+    def __init__(self, parent=None, width=5, height=2, dpi=100):
+        fig = Figure(figsize=(width, height), dpi=dpi)
+        self.axes = fig.add_subplot(111)
+        super().__init__(fig)
+        self.setParent(parent)
+
+    def plot(self, data, ylabel=""):
+        self.axes.cla()
+        self.axes.plot(data, linestyle='-')  # siempre línea continua
+        if ylabel:
+            self.axes.set_ylabel(ylabel)
+        self.axes.grid(True)
+        self.draw()
+
+# -----------------------
+# GUI principal
+# -----------------------
+class ControlGUI(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("AI-FrED0 Control Interface")
+        self.setWindowIcon(QIcon(r"tec-logo.png"))
+        self.resize(900, 600)
+
+        # Estados y datos
+        self.estado = ['0','0','0','0']
+        self.velocidad_extrusor = 100
+        self.temp_data     = []        # lecturas de temperatura
+        self.motor_data    = []        # 1/0 motor spool
+        self.fan_data      = []        # 1/0 fan
+        self.extruder_data = []        # 1/0 extrusor
+
+        # Layout principal: izquierda (gráficas) / derecha (controles)
+        main_layout = QHBoxLayout(self)
+
+        # --- Panel de gráficas ---
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+        self.canvas_temp     = PlotCanvas(self, width=5, height=2)
+        self.canvas_motor    = PlotCanvas(self, width=5, height=2)
+        self.canvas_fan      = PlotCanvas(self, width=5, height=2)
+        self.canvas_extruder = PlotCanvas(self, width=5, height=2)
+        left_layout.addWidget(self.canvas_temp)
+        left_layout.addWidget(self.canvas_motor)
+        left_layout.addWidget(self.canvas_fan)
+        left_layout.addWidget(self.canvas_extruder)
+        main_layout.addWidget(left_widget, 3)
+
+        # --- Panel de controles ---
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
+
+        # Botones ON/OFF
+        self.btn_spool   = QPushButton("Motor Spool (OFF)")
+        self.btn_fan     = QPushButton("Fan (OFF)")
+        self.btn_extrude = QPushButton("Extrusor (OFF)")
+        self.btn_heater  = QPushButton("Heater (OFF)")
+        for idx, btn, name in [
+            (0, self.btn_spool,   "Motor Spool"),
+            (1, self.btn_fan,     "Fan"),
+            (2, self.btn_extrude, "Extrusor"),
+            (3, self.btn_heater,  "Heater")
+        ]:
+            btn.clicked.connect(lambda ch, i=idx, b=btn, n=name: self.toggle(i, b, n))
+            right_layout.addWidget(btn)
+
+        # Slider de velocidad de extrusor
+        self.lbl_slider = QLabel(f"Velocidad Extrusor: {self.velocidad_extrusor}")
+        self.slider     = QSlider(Qt.Horizontal)
+        self.slider.setRange(10, 100)
+        self.slider.setValue(self.velocidad_extrusor)
+        self.slider.valueChanged.connect(self.actualizar_velocidad)
+        right_layout.addWidget(self.lbl_slider)
+        right_layout.addWidget(self.slider)
+
+        # Botón exportar CSV
+        self.export_button = QPushButton("Exportar CSV")
+        self.export_button.clicked.connect(self.export_csv)
+        right_layout.addWidget(self.export_button)
+
+        right_layout.addStretch()
+        main_layout.addWidget(right_widget, 1)
+
+        # Timer para actualización periódica
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.actualizar)
+        self.timer.start(500)   # cada 500 ms
+
+    #------------------------------------------------
+    # Funciones de control
+    #------------------------------------------------
+    def toggle(self, index, boton, nombre):
+        self.estado[index] = '1' if self.estado[index]=='0' else '0'
+        estado_txt = "ON" if self.estado[index]=='1' else "OFF"
+        boton.setText(f"{nombre} ({estado_txt})")
+
+    def actualizar_velocidad(self, val):
+        self.velocidad_extrusor = val
+        self.lbl_slider.setText(f"Velocidad Extrusor: {val}")
+
+    #------------------------------------------------
+    # Loop de comunicación y gráfica
+    #------------------------------------------------
+    def actualizar(self):
+        # 1) Enviar comandos de actuadores
+        cmd_act = "ACTUATE:" + ''.join(self.estado) + "\n"
+        arduino.write(cmd_act.encode())
+        cmd_vel = f"SPEED:{self.velocidad_extrusor}\n"
+        arduino.write(cmd_vel.encode())
+
+        # 2) Leer todas las líneas serial disponibles
+        while arduino.in_waiting:
+            line = arduino.readline().decode(errors='ignore').strip()
+            # Parseo de datos
+            if line.startswith("Temp:"):
+                try:
+                    t = float(line.split(':')[1])
+                    self.temp_data.append(t)
+                except:
+                    pass
+            elif line.startswith("Motor Spool:"):
+                v = 1 if "Encendido" in line else 0
+                self.motor_data.append(v)
+            elif line.startswith("Fan:"):
+                v = 1 if "Encendido" in line else 0
+                self.fan_data.append(v)
+            elif line.startswith("Extruder:"):
+                v = 1 if "Encendido" in line else 0
+                self.extruder_data.append(v)
+
+        # 3) Limitar largo de datos (últimos 100)
+        max_len = 100
+        self.temp_data     = self.temp_data[-max_len:]
+        self.motor_data    = self.motor_data[-max_len:]
+        self.fan_data      = self.fan_data[-max_len:]
+        self.extruder_data = self.extruder_data[-max_len:]
+
+        # 4) Actualizar gráficas
+        self.canvas_temp.plot(self.temp_data, ylabel="Temp (°C)")
+        self.canvas_motor.plot(self.motor_data, ylabel="Motor ON/OFF")
+        self.canvas_fan.plot(self.fan_data, ylabel="Fan ON/OFF")
+        self.canvas_extruder.plot(self.extruder_data, ylabel="Extrusor ON/OFF")
+
+    #------------------------------------------------
+    # Exportar CSV
+    #------------------------------------------------
+    def export_csv(self):
+        path, _ = QFileDialog.getSaveFileName(self, "Guardar CSV", "data.csv", "CSV Files (*.csv)")
+        if not path:
+            return
+        import csv
+        with open(path, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['index','Temp','Motor','Fan','Extrusor'])
+            for i in range(len(self.temp_data)):
+                m = self.motor_data[i] if i < len(self.motor_data) else ''
+                f_ = self.fan_data[i]    if i < len(self.fan_data)   else ''
+                e = self.extruder_data[i] if i < len(self.extruder_data) else ''
+                writer.writerow([i, self.temp_data[i], m, f_, e])
+        print(f"CSV guardado en {path}")
+
+# -----------------------
+# Inicio de la aplicación
+# -----------------------
+def main():
+    app = QApplication(sys.argv)
+    gui = ControlGUI()
+    gui.show()
+    sys.exit(app.exec_())
+
+if __name__ == '__main__':
+    main()
+ChatGPT dijo:
+¡Perfecto!
+Aquí te explico cómo hacer que el ciclo del servo inicie SOLO cuando presiones un botón en tu interfaz.
+Vas a necesitar:
+
+Agregar un botón en la GUI que envíe un comando por serial (por ejemplo: "SERVO:ON\n" y "SERVO:OFF\n").
+
+Modificar el código de Arduino para arrancar y detener el ciclo del servo cuando reciba "SERVO:ON" o "SERVO:OFF" por Serial.
+
+1. Modificación de la Interfaz (interfaz.py):
+Agrega esto en el bloque de controles de tu GUI:
+
+Busca donde agregas los botones (donde está # Botones ON/OFF).
+Debajo de los botones de control, agrega:
+
+self.btn_servo = QPushButton("Iniciar Movimiento Servo")
+self.btn_servo.setCheckable(True)
+self.btn_servo.clicked.connect(self.toggle_servo)
+right_layout.addWidget(self.btn_servo)
+Y al final de tu clase ControlGUI, agrega la función para manejar el botón:
+
+def toggle_servo(self):
+    if self.btn_servo.isChecked():
+        self.btn_servo.setText("Detener Movimiento Servo")
+        arduino.write(b"SERVO:ON\n")
+    else:
+        self.btn_servo.setText("Iniciar Movimiento Servo")
+        arduino.write(b"SERVO:OFF\n")
+¡Eso es todo en el Python!
+Ahora tu interfaz tiene un botón que manda "SERVO:ON\n" para iniciar el ciclo, y "SERVO:OFF\n" para detenerlo.
+
+2. Modificación del código Arduino
+1. Agrega variables globales:
+Agrega arriba (antes de setup()):
+
+#include <Servo.h>
+Servo miServo;
+const int servoPin = 10;
+const int SERVO_CENTRO = 90;
+const int SERVO_IZQ = SERVO_CENTRO - 65;
+const int SERVO_DER = SERVO_CENTRO + 65;
+unsigned long lastServoMove = 0;
+int servoStep = 0;
+const unsigned long SERVO_INTERVAL = 800;
+bool servo_activo = false; // NUEVO: control del servo por comando
+2. En setup() inicializa el servo:
+miServo.attach(servoPin);
+miServo.write(SERVO_CENTRO);
+3. En loop(), después de leer Serial, agrega:
+Asegúrate de que el ciclo del servo SOLO corre si servo_activo es true:
+
+// ---------- CONTROL DEL SERVO (no bloqueante, SOLO si está activo) ----------
+if (servo_activo) {
+  unsigned long now = millis();
+  if (now - lastServoMove > SERVO_INTERVAL) {
+    lastServoMove = now;
+    switch (servoStep) {
+      case 0: miServo.write(SERVO_IZQ); break;
+      case 1: miServo.write(SERVO_CENTRO); break;
+      case 2: miServo.write(SERVO_DER); break;
+      case 3: miServo.write(SERVO_CENTRO); break;
+    }
+    servoStep++;
+    if (servoStep > 3) servoStep = 0;
+  }
+}
+4. Modifica tu función de procesamiento de comandos para leer SERVO:ON y SERVO:OFF
+En tu función processInput(String command), agrega:
+
+else if (command.startsWith("SERVO:ON")) {
+  servo_activo = true;
+} else if (command.startsWith("SERVO:OFF")) {
+  servo_activo = false;
+  miServo.write(SERVO_CENTRO); // regresa el servo al centro al parar
+}
+Resumen de cambios
+Botón en la GUI que alterna ciclo ON/OFF y manda SERVO:ON\n o SERVO:OFF\n.
+
+Arduino inicia/detiene el ciclo del servo al recibir ese comando por Serial.
+
+¿Te gustaría el código de Arduino ya integrado completo para copiar y pegar?
+¿O solo con estos snippets es suficiente?
+Si quieres el .py también completo, dime y te lo acomodo todo junto.
+
+Dijiste:
+dame el codigo completo 
+ChatGPT dijo:
+¡Por supuesto! Aquí tienes ambos códigos completos y listos:
+
+1. interfaz.py (Python con PyQt5, botón de control para el servo)
+Solo debes agregar el bloque del botón y la función en tu GUI. Aquí va todo el archivo modificado para que sea plug and play.
+
+import sys
+import serial
+import serial.tools.list_ports
+import numpy as np
+from PyQt5.QtWidgets import (
+    QApplication, QWidget, QPushButton, QVBoxLayout, QHBoxLayout,
+    QLabel, QSlider, QFileDialog
+)
+from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtGui import QIcon
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
+
+# -----------------------
+# Serial: auto-detect puerto
+# -----------------------
+
+def encontrar_puerto_arduino():
+    puertos = serial.tools.list_ports.comports()
+    for p in puertos:
+        if "Arduino" in p.description or "ttyACM" in p.device or "ttyUSB" in p.device:
+            return p.device
+    return None
+
+puerto = encontrar_puerto_arduino() or "/dev/ttyACM0"
+arduino = serial.Serial(puerto, 115200, timeout=1)
+
+# -----------------------
+# PlotCanvas: contenedor de gráficas
+# -----------------------
+class PlotCanvas(FigureCanvas):
+    def __init__(self, parent=None, width=5, height=2, dpi=100):
+        fig = Figure(figsize=(width, height), dpi=dpi)
+        self.axes = fig.add_subplot(111)
+        super().__init__(fig)
+        self.setParent(parent)
+
+    def plot(self, data, ylabel=""):
+        self.axes.cla()
+        self.axes.plot(data, linestyle='-')  # siempre línea continua
+        if ylabel:
+            self.axes.set_ylabel(ylabel)
+        self.axes.grid(True)
+        self.draw()
+
+# -----------------------
+# GUI principal
+# -----------------------
+class ControlGUI(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("AI-FrED0 Control Interface")
+        self.setWindowIcon(QIcon(r"tec-logo.png"))
+        self.resize(900, 600)
+
+        # Estados y datos
+        self.estado = ['0','0','0','0']
+        self.velocidad_extrusor = 100
+        self.temp_data     = []        # lecturas de temperatura
+        self.motor_data    = []        # 1/0 motor spool
+        self.fan_data      = []        # 1/0 fan
+        self.extruder_data = []        # 1/0 extrusor
+
+        # Layout principal: izquierda (gráficas) / derecha (controles)
+        main_layout = QHBoxLayout(self)
+
+        # --- Panel de gráficas ---
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+        self.canvas_temp     = PlotCanvas(self, width=5, height=2)
+        self.canvas_motor    = PlotCanvas(self, width=5, height=2)
+        self.canvas_fan      = PlotCanvas(self, width=5, height=2)
+        self.canvas_extruder = PlotCanvas(self, width=5, height=2)
+        left_layout.addWidget(self.canvas_temp)
+        left_layout.addWidget(self.canvas_motor)
+        left_layout.addWidget(self.canvas_fan)
+        left_layout.addWidget(self.canvas_extruder)
+        main_layout.addWidget(left_widget, 3)
+
+        # --- Panel de controles ---
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
+
+        # Botones ON/OFF
+        self.btn_spool   = QPushButton("Motor Spool (OFF)")
+        self.btn_fan     = QPushButton("Fan (OFF)")
+        self.btn_extrude = QPushButton("Extrusor (OFF)")
+        self.btn_heater  = QPushButton("Heater (OFF)")
+        for idx, btn, name in [
+            (0, self.btn_spool,   "Motor Spool"),
+            (1, self.btn_fan,     "Fan"),
+            (2, self.btn_extrude, "Extrusor"),
+            (3, self.btn_heater,  "Heater")
+        ]:
+            btn.clicked.connect(lambda ch, i=idx, b=btn, n=name: self.toggle(i, b, n))
+            right_layout.addWidget(btn)
+
+        # --- BOTÓN DE CONTROL DEL SERVO ---
+        self.btn_servo = QPushButton("Iniciar Movimiento Servo")
+        self.btn_servo.setCheckable(True)
+        self.btn_servo.clicked.connect(self.toggle_servo)
+        right_layout.addWidget(self.btn_servo)
+
+        # Slider de velocidad de extrusor
+        self.lbl_slider = QLabel(f"Velocidad Extrusor: {self.velocidad_extrusor}")
+        self.slider     = QSlider(Qt.Horizontal)
+        self.slider.setRange(10, 100)
+        self.slider.setValue(self.velocidad_extrusor)
+        self.slider.valueChanged.connect(self.actualizar_velocidad)
+        right_layout.addWidget(self.lbl_slider)
+        right_layout.addWidget(self.slider)
+
+        # Botón exportar CSV
+        self.export_button = QPushButton("Exportar CSV")
+        self.export_button.clicked.connect(self.export_csv)
+        right_layout.addWidget(self.export_button)
+
+        right_layout.addStretch()
+        main_layout.addWidget(right_widget, 1)
+
+        # Timer para actualización periódica
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.actualizar)
+        self.timer.start(500)   # cada 500 ms
+
+    #------------------------------------------------
+    # Funciones de control
+    #------------------------------------------------
+    def toggle(self, index, boton, nombre):
+        self.estado[index] = '1' if self.estado[index]=='0' else '0'
+        estado_txt = "ON" if self.estado[index]=='1' else "OFF"
+        boton.setText(f"{nombre} ({estado_txt})")
+
+    def actualizar_velocidad(self, val):
+        self.velocidad_extrusor = val
+        self.lbl_slider.setText(f"Velocidad Extrusor: {val}")
+
+    def toggle_servo(self):
+        if self.btn_servo.isChecked():
+            self.btn_servo.setText("Detener Movimiento Servo")
+            arduino.write(b"SERVO:ON\n")
+        else:
+            self.btn_servo.setText("Iniciar Movimiento Servo")
+            arduino.write(b"SERVO:OFF\n")
+
+    #------------------------------------------------
+    # Loop de comunicación y gráfica
+    #------------------------------------------------
+    def actualizar(self):
+        # 1) Enviar comandos de actuadores
+        cmd_act = "ACTUATE:" + ''.join(self.estado) + "\n"
+        arduino.write(cmd_act.encode())
+        cmd_vel = f"SPEED:{self.velocidad_extrusor}\n"
+        arduino.write(cmd_vel.encode())
+
+        # 2) Leer todas las líneas serial disponibles
+        while arduino.in_waiting:
+            line = arduino.readline().decode(errors='ignore').strip()
+            # Parseo de datos
+            if line.startswith("Temp:"):
+                try:
+                    t = float(line.split(':')[1])
+                    self.temp_data.append(t)
+                except:
+                    pass
+            elif line.startswith("Motor Spool:"):
+                v = 1 if "Encendido" in line else 0
+                self.motor_data.append(v)
+            elif line.startswith("Fan:"):
+                v = 1 if "Encendido" in line else 0
+                self.fan_data.append(v)
+            elif line.startswith("Extruder:"):
+                v = 1 if "Encendido" in line else 0
+                self.extruder_data.append(v)
+
+        # 3) Limitar largo de datos (últimos 100)
+        max_len = 100
+        self.temp_data     = self.temp_data[-max_len:]
+        self.motor_data    = self.motor_data[-max_len:]
+        self.fan_data      = self.fan_data[-max_len:]
+        self.extruder_data = self.extruder_data[-max_len:]
+
+        # 4) Actualizar gráficas
+        self.canvas_temp.plot(self.temp_data, ylabel="Temp (°C)")
+        self.canvas_motor.plot(self.motor_data, ylabel="Motor ON/OFF")
+        self.canvas_fan.plot(self.fan_data, ylabel="Fan ON/OFF")
+        self.canvas_extruder.plot(self.extruder_data, ylabel="Extrusor ON/OFF")
+
+    #------------------------------------------------
+    # Exportar CSV
+    #------------------------------------------------
+    def export_csv(self):
+        path, _ = QFileDialog.getSaveFileName(self, "Guardar CSV", "data.csv", "CSV Files (*.csv)")
+        if not path:
+            return
+        import csv
+        with open(path, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['index','Temp','Motor','Fan','Extrusor'])
+            for i in range(len(self.temp_data)):
+                m = self.motor_data[i] if i < len(self.motor_data) else ''
+                f_ = self.fan_data[i]    if i < len(self.fan_data)   else ''
+                e = self.extruder_data[i] if i < len(self.extruder_data) else ''
+                writer.writerow([i, self.temp_data[i], m, f_, e])
+        print(f"CSV guardado en {path}")
+
+# -----------------------
+# Inicio de la aplicación
+# -----------------------
+def main():
+    app = QApplication(sys.argv)
+    gui = ControlGUI()
+    gui.show()
+    sys.exit(app.exec_())
+
+if __name__ == '__main__':
+    main()
+2. Código Arduino (Ciclo de servo controlado por comando serial)
+Este es tu sketch completo con el bloque de servo listo para activarse/desactivarse desde el botón de la interfaz.
+
+#include <math.h>
+#include "Thermistor.h"
+#include "pin_map.h"
+#include <PID_v1.h>
+#include <AccelStepper.h>
+#include <Servo.h>  // Incluye la librería Servo
+
+Thermistor Thermistor1(TEMP_0_PIN);
+float Temp;
+String input = "";
+String digits = "0000";  // Estado de los actuadores
+
+// Motores
+AccelStepper motor1(AccelStepper::DRIVER, 54, 55); // Spool
+AccelStepper motor2(AccelStepper::DRIVER, 26, 28); // Extruder
+const int enablePin1 = 38;
+const int enablePin2 = 24;
+bool motor1Enabled = false;
+bool motor2Enabled = false;
+
+// PID
+double Setpoint, Input, Output;
+double Kp = 22.85, Ki = 1.85, Kd = 70.65;
+PID myPID(&Input, &Output, &Setpoint, Kp, Ki, Kd, DIRECT);
+
+// Estados
+int moto_m = 0, fan_m = 0, heater_m = 0, extruder_m = 0;
+unsigned long lastStatusUpdate = 0;
+
+// -------- SERVO --------
+Servo miServo;
+const int servoPin = 10;
+const int SERVO_CENTRO = 90;
+const int SERVO_IZQ = SERVO_CENTRO - 65; // 25
+const int SERVO_DER = SERVO_CENTRO + 65; // 155
+unsigned long lastServoMove = 0;
+int servoStep = 0;
+const unsigned long SERVO_INTERVAL = 800; // ms
+bool servo_activo = false; // Control del servo por comando
+
+void setup() {
+  Serial.begin(115200);
+  Serial.println("Conexión establecida");
+
+  pinMode(TEMP_0_PIN, INPUT_PULLUP);
+  pinMode(RAMPS_D9_PIN, OUTPUT);    // fan
+  pinMode(RAMPS_D10_PIN, OUTPUT);   // heater
+  pinMode(TEMP_OUT, OUTPUT);
+  pinMode(enablePin1, OUTPUT);
+  pinMode(enablePin2, OUTPUT);
+
+  digitalWrite(enablePin1, HIGH);
+  digitalWrite(enablePin2, HIGH);
+
+  motor1.setMaxSpeed(5000);
+  motor1.setAcceleration(100);
+
+  motor2.setMaxSpeed(2000);
+  motor2.setAcceleration(1000);
+
+  Setpoint = 190;
+  myPID.SetMode(AUTOMATIC);
+  myPID.SetOutputLimits(0, 255);
+
+  // --- Inicializar Servo ---
+  miServo.attach(servoPin);
+  miServo.write(SERVO_CENTRO);
+}
+
+void loop() {
+  delay(10);
+  Input = Thermistor1.getValue();
+  myPID.Compute();
+
+  // Procesar datos seriales
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (c == '\n') {
+      processInput(input);
+      input = "";
+    } else {
+      input += c;
+    }
+  }
+
+  // MOTOR SPOOL
+  if (digits.length() >= 1 && digits[0] == '1') {
+    if (!motor1Enabled) {
+      digitalWrite(enablePin1, LOW);
+      motor1Enabled = true;
+    }
+    motor1.setSpeed(500);
+    motor1.runSpeed();
+    moto_m = 1;
+  } else {
+    if (motor1Enabled) {
+      digitalWrite(enablePin1, HIGH);
+      motor1Enabled = false;
+    }
+    moto_m = 0;
+  }
+
+  // FAN
+  if (digits.length() >= 2 && digits[1] == '1') {
+    analogWrite(RAMPS_D9_PIN, 150);
+    fan_m = 1;
+  } else {
+    analogWrite(RAMPS_D9_PIN, 0);
+    fan_m = 0;
+  }
+
+  // EXTRUDER
+  if (digits.length() >= 3 && digits[2] == '1') {
+    if (!motor2Enabled) {
+      digitalWrite(enablePin2, LOW);
+      motor2Enabled = true;
+    }
+    motor2.runSpeed();
+    extruder_m = 1;
+  } else {
+    if (motor2Enabled) {
+      digitalWrite(enablePin2, HIGH);
+      motor2Enabled = false;
+    }
+    extruder_m = 0;
+  }
+
+  // HEATER (control por PID + ACTUATE)
+  if (digits.length() >= 4 && digits[3] == '1' && Input < Setpoint) {
+    analogWrite(RAMPS_D10_PIN, (int)Output);
+    heater_m = 1;
+  } else {
+    analogWrite(RAMPS_D10_PIN, 0);
+    heater_m = 0;
+  }
+
+  // ---------- CONTROL DEL SERVO (no bloqueante, SOLO si está activo) ----------
+  if (servo_activo) {
+    unsigned long now = millis();
+    if (now - lastServoMove > SERVO_INTERVAL) {
+      lastServoMove = now;
+      switch (servoStep) {
+        case 0: miServo.write(SERVO_IZQ); break;
+        case 1: miServo.write(SERVO_CENTRO); break;
+        case 2: miServo.write(SERVO_DER); break;
+        case 3: miServo.write(SERVO_CENTRO); break;
+      }
+      servoStep++;
+      if (servoStep > 3) servoStep = 0;
+    }
+  }
+
+  // Mostrar estado cada segundo
+  unsigned long currentMillis = millis();
+  if (currentMillis - lastStatusUpdate >= 1000) {
+    lastStatusUpdate = currentMillis;
+    Serial.print("Temp:"); 
+    Serial.println(Input);
+    Serial.println("--- Estado de componentes ---");
+    Serial.print("Motor Spool: "); Serial.println(moto_m ? "Encendido" : "Apagado");
+    Serial.print("Fan:          "); Serial.println(fan_m ? "Encendido" : "Apagado");
+    Serial.print("Heater:       "); Serial.println(heater_m ? "Encendido" : "Apagado");
+    Serial.print("Extruder:     "); Serial.println(extruder_m ? "Encendido" : "Apagado");
+    Serial.println("-----------------------------");
+  }
+}
+
+void processInput(String command) {
+  Serial.print("Recibido: ");
+  Serial.println(command);
+
+  if (command.startsWith("ACTUATE:")) {
+    digits = command.substring(8);
+  } else if (command.startsWith("SPEED:")) {
+    int nuevaVel = command.substring(6).toInt();
+    motor2.setSpeed(nuevaVel);
+    Serial.print("Nueva velocidad extrusor: ");
+    Serial.println(nuevaVel);
+  } else if (command.startsWith("SERVO:ON")) {
+    servo_activo = true;
+  } else if (command.startsWith("SERVO:OFF")) {
+    servo_activo = false;
+    miServo.write(SERVO_CENTRO); // regresa el servo al centro al parar
+  }
+}
+Notas:
+El botón "Iniciar Movimiento Servo" activa el ciclo, y "Detener Movimiento Servo" lo detiene.
+
+Si tienes alguna duda o quieres agregar feedback visual del estado del servo en la interfaz, dime y te ayudo.
+
+No olvides conectar tu servo al pin 10 (o cambia servoPin por el pin que uses).
+
+¿Listo para probar? Si necesitas alguna variante, solo dilo.
+
+
+
+
+Sin archivos seleccionadosSin archivos seleccionados
+ChatGPT puede cometer errores. Comprueba la información importante.
