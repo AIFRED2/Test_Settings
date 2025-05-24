@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import (
     QLabel, QSlider, QFileDialog
 )
 from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtGui import QIcon
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
@@ -94,6 +95,12 @@ class ControlGUI(QWidget):
             btn.clicked.connect(lambda ch, i=idx, b=btn, n=name: self.toggle(i, b, n))
             right_layout.addWidget(btn)
 
+        # --- BOTÓN DE CONTROL DEL SERVO ---
+        self.btn_servo = QPushButton("Iniciar Movimiento Servo")
+        self.btn_servo.setCheckable(True)
+        self.btn_servo.clicked.connect(self.toggle_servo)
+        right_layout.addWidget(self.btn_servo)
+
         # Slider de velocidad de extrusor
         self.lbl_slider = QLabel(f"Velocidad Extrusor: {self.velocidad_extrusor}")
         self.slider     = QSlider(Qt.Horizontal)
@@ -127,6 +134,14 @@ class ControlGUI(QWidget):
     def actualizar_velocidad(self, val):
         self.velocidad_extrusor = val
         self.lbl_slider.setText(f"Velocidad Extrusor: {val}")
+
+    def toggle_servo(self):
+        if self.btn_servo.isChecked():
+            self.btn_servo.setText("Detener Movimiento Servo")
+            arduino.write(b"SERVO:ON\n")
+        else:
+            self.btn_servo.setText("Iniciar Movimiento Servo")
+            arduino.write(b"SERVO:OFF\n")
 
     #------------------------------------------------
     # Loop de comunicación y gráfica
