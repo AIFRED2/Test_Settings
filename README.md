@@ -1,4 +1,5 @@
 # AIFRED2 Test Suite
+Pip install : pip install pyserial numpy pyqt5 pyqt5-qt5 pyqt5-sip matplotlib
 
 ¡Buen día!  
 Este repositorio te permite poner a prueba **AIFRED2** en tu Raspberry Pi sin necesidad de conexión a Internet, ideal para tests sencillos.
