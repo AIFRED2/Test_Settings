@@ -1,18 +1,20 @@
 import sys
-import serial
-import serial.tools.list_ports
+import serial                      
+import serial.tools.list_ports      
 import numpy as np
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QPushButton, QVBoxLayout, QHBoxLayout,
     QLabel, QSlider, QFileDialog
 )
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QTimer, QUrl
 from PyQt5.QtGui import QIcon
+from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
+from PyQt5.QtMultimediaWidgets import QVideoWidget
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
 # -----------------------
-# Serial: auto-detect puerto
+# Serial: auto-detect puerto 
 # -----------------------
 
 def encontrar_puerto_arduino():
@@ -50,17 +52,18 @@ class ControlGUI(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("AI-FrED0 Control Interface")
-        self.resize(900, 600)
+        self.resize(1100, 700)
 
         # Estados y datos
         self.estado = ['0','0','0','0']
         self.velocidad_extrusor = 100
-        self.temp_data     = []        # lecturas de temperatura
-        self.motor_data    = []        # 1/0 motor spool
-        self.fan_data      = []        # 1/0 fan
-        self.extruder_data = []        # 1/0 extrusor
+        self.temperatura_objetivo = 190  # <--- NUEVO
+        self.temp_data     = []
+        self.motor_data    = []
+        self.fan_data      = []
+        self.extruder_data = []
 
-        # Layout principal: izquierda (gráficas) / derecha (controles)
+        # Layout principal
         main_layout = QHBoxLayout(self)
 
         # --- Panel de gráficas ---
@@ -75,6 +78,11 @@ class ControlGUI(QWidget):
         left_layout.addWidget(self.canvas_fan)
         left_layout.addWidget(self.canvas_extruder)
         main_layout.addWidget(left_widget, 3)
+
+        # --- Gráfica de datos externos ---
+        self.external_data = []  # PY EXTERNO
+        self.canvas_external = PlotCanvas(self, width=5, height=2)
+        left_layout.addWidget(self.canvas_external)
 
         # --- Panel de controles ---
         right_widget = QWidget()
@@ -94,12 +102,6 @@ class ControlGUI(QWidget):
             btn.clicked.connect(lambda ch, i=idx, b=btn, n=name: self.toggle(i, b, n))
             right_layout.addWidget(btn)
 
-        # --- BOTÓN DE CONTROL DEL SERVO ---
-        self.btn_servo = QPushButton("Iniciar Movimiento Servo")
-        self.btn_servo.setCheckable(True)
-        self.btn_servo.clicked.connect(self.toggle_servo)
-        right_layout.addWidget(self.btn_servo)
-
         # Slider de velocidad de extrusor
         self.lbl_slider = QLabel(f"Velocidad Extrusor: {self.velocidad_extrusor}")
         self.slider     = QSlider(Qt.Horizontal)
@@ -109,18 +111,44 @@ class ControlGUI(QWidget):
         right_layout.addWidget(self.lbl_slider)
         right_layout.addWidget(self.slider)
 
+        # --- Slider de temperatura (NUEVO) ---
+        self.lbl_temp = QLabel(f"Temperatura objetivo: {self.temperatura_objetivo} °C")
+        self.slider_temp = QSlider(Qt.Horizontal)
+        self.slider_temp.setRange(0, 300)
+        self.slider_temp.setValue(self.temperatura_objetivo)
+        self.slider_temp.valueChanged.connect(self.actualizar_temperatura)
+        right_layout.addWidget(self.lbl_temp)
+        right_layout.addWidget(self.slider_temp)
+
         # Botón exportar CSV
         self.export_button = QPushButton("Exportar CSV")
         self.export_button.clicked.connect(self.export_csv)
         right_layout.addWidget(self.export_button)
 
-        right_layout.addStretch()
+        # ----------------- Reproductor de video -----------------
+        self.videoWidget = QVideoWidget()
+        self.player = QMediaPlayer(None, QMediaPlayer.VideoSurface)
+        self.player.setVideoOutput(self.videoWidget)
+
+        # Botones de control de video
+        self.btn_open_video = QPushButton("Abrir Video")
+        self.btn_open_video.clicked.connect(self.open_video)
+
+        right_layout.addWidget(QLabel("Reproductor de Video"))
+        right_layout.addWidget(self.videoWidget)
+        right_layout.addWidget(self.btn_open_video)
+
+        # --- Video auto play ---
+        video_path = r"C:\Users\diego\Downloads\video1832530877.wmv"   # ARCHIVO AQUÍ
+        self.player.setMedia(QMediaContent(QUrl.fromLocalFile(video_path)))
+        self.player.play()
+
         main_layout.addWidget(right_widget, 1)
 
-        # Timer para actualización periódica
-        self.timer = QTimer(self)
+        # Timer para refrescar gráficas
+        self.timer = QTimer()
         self.timer.timeout.connect(self.actualizar)
-        self.timer.start(500)   # cada 500 ms
+        self.timer.start(1000)  # cada 1 segundo
 
     #------------------------------------------------
     # Funciones de control
@@ -134,28 +162,27 @@ class ControlGUI(QWidget):
         self.velocidad_extrusor = val
         self.lbl_slider.setText(f"Velocidad Extrusor: {val}")
 
-    def toggle_servo(self):
-        if self.btn_servo.isChecked():
-            self.btn_servo.setText("Detener Movimiento Servo")
-            arduino.write(b"SERVO:ON\n")
-        else:
-            self.btn_servo.setText("Iniciar Movimiento Servo")
-            arduino.write(b"SERVO:OFF\n")
+    # NUEVO: CONTROL DE LA TEMPERATURA
+    def actualizar_temperatura(self, val):
+        self.temperatura_objetivo = val
+        self.lbl_temp.setText(f"Temperatura objetivo: {val} °C")
 
     #------------------------------------------------
     # Loop de comunicación y gráfica
     #------------------------------------------------
     def actualizar(self):
-        # 1) Enviar comandos de actuadores
+        # mandar comandos al Arduino, Añadiendo el nuevo comando de temperatura
         cmd_act = "ACTUATE:" + ''.join(self.estado) + "\n"
         arduino.write(cmd_act.encode())
+
         cmd_vel = f"SPEED:{self.velocidad_extrusor}\n"
         arduino.write(cmd_vel.encode())
 
-        # 2) Leer todas las líneas serial disponibles
+        cmd_temp = f"TEMP:{self.temperatura_objetivo}\n"  # <--- NUEVO
+        arduino.write(cmd_temp.encode())
+
         while arduino.in_waiting:
             line = arduino.readline().decode(errors='ignore').strip()
-            # Parseo de datos
             if line.startswith("Temp:"):
                 try:
                     t = float(line.split(':')[1])
@@ -172,18 +199,29 @@ class ControlGUI(QWidget):
                 v = 1 if "Encendido" in line else 0
                 self.extruder_data.append(v)
 
-        # 3) Limitar largo de datos (últimos 100)
         max_len = 100
         self.temp_data     = self.temp_data[-max_len:]
         self.motor_data    = self.motor_data[-max_len:]
         self.fan_data      = self.fan_data[-max_len:]
         self.extruder_data = self.extruder_data[-max_len:]
 
-        # 4) Actualizar gráficas
         self.canvas_temp.plot(self.temp_data, ylabel="Temp (°C)")
         self.canvas_motor.plot(self.motor_data, ylabel="Motor ON/OFF")
         self.canvas_fan.plot(self.fan_data, ylabel="Fan ON/OFF")
         self.canvas_extruder.plot(self.extruder_data, ylabel="Extrusor ON/OFF")
+
+        # ------------------- Datos externos -------------------
+        try:
+            with open("external_data.csv", "r") as f:
+                lines = f.readlines()
+                new_data = [float(line.strip()) for line in lines if line.strip()]
+                self.external_data.extend(new_data)
+        except:
+            pass
+        # Limitar largo
+        max_len = 100
+        self.external_data = self.external_data[-max_len:]
+        self.canvas_external.plot(self.external_data, ylabel="Datos externos")
 
     #------------------------------------------------
     # Exportar CSV
@@ -202,6 +240,20 @@ class ControlGUI(QWidget):
                 e = self.extruder_data[i] if i < len(self.extruder_data) else ''
                 writer.writerow([i, self.temp_data[i], m, f_, e])
         print(f"CSV guardado en {path}")
+
+    #------------------------------------------------
+    # Video
+    #------------------------------------------------
+    def open_video(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Abrir video", "", "Videos (*.mp4 *.avi *.mov)")
+        if path:
+            self.player.setMedia(QMediaContent(QUrl.fromLocalFile(path)))
+
+    def play_pause_video(self):
+        if self.player.state() == QMediaPlayer.PlayingState:
+            self.player.pause()
+        else:
+            self.player.play()
 
 # -----------------------
 # Inicio de la aplicación
